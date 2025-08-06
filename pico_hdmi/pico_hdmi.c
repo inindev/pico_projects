@@ -65,7 +65,7 @@
 
 // tile and framebuffer settings
 int X_TILE = 80, Y_TILE = 40;
-uint8_t FRAMEBUFFER[(MODE_H_ACTIVE_PIXELS / 2) * (MODE_V_ACTIVE_LINES / 2) * 2];
+uint8_t FRAMEBUFFER[MODE_H_ACTIVE_PIXELS * MODE_V_ACTIVE_LINES / 2] __attribute__((aligned(4)));
 uint16_t ALIGNED HDMIlines[2][MODE_H_ACTIVE_PIXELS] = {0};
 uint8_t *WriteBuf = FRAMEBUFFER;
 uint8_t *DisplayBuf = FRAMEBUFFER;
@@ -865,9 +865,10 @@ int main(void) {
     stdio_init_all();
 
     // configure gpio 47 for psram chip select
-    printf("Configuring GPIO 47 for PSRAM chip select...\n");
-    gpio_set_function(47, GPIO_FUNC_XIP_CS1);
-    xip_ctrl_hw->ctrl |= XIP_CTRL_WRITABLE_M1_BITS;
+    //printf("Configuring GPIO 47 for PSRAM chip select...\n");
+    //gpio_set_function(47, GPIO_FUNC_XIP_CS1);
+    //xip_ctrl_hw->ctrl |= XIP_CTRL_WRITABLE_M1_BITS;
+
     HDMImode = 0;
 
     // launch hdmi core on core1
@@ -878,53 +879,61 @@ int main(void) {
     // print hstx clock speed
     printf("HSTX clock speed %ld Hz\r\n", clock_get_hz(clk_hstx));
 
-    // mode 1: 640x480x2 color
-    printf("Setting up Mode 1: 640x480x2 color\n");
+    // Mode 1: 640x480x2 color (1bpp, RGB555 output with tiles)
+    printf("Setting up Mode 1: 640x480x2 color (1bpp, RGB555 output with tiles)\n");
+    HDMImode = 0; // disable output during setup
     settiles();
     uint16_t *x = tilefcols, *b = tilebcols;
     for (int i = 0; i < MODE_H_ACTIVE_PIXELS / 8 * MODE_V_ACTIVE_LINES / 12; i++) {
         x[i] = RGB555(rgb(rand() % 255, rand() % 255, rand() % 255));
         b[i] = 0xFFFF;
     }
-    HDMImode = SCREENMODE1;
+    memset(FRAMEBUFFER, 0, MODE1SIZE);
     HRes = MODE_H_ACTIVE_PIXELS;
     VRes = MODE_V_ACTIVE_LINES;
     t = ((HRes > VRes) ? HRes : VRes) / 7;
     DrawRectangle = DrawRectangle2;
     WriteBuf = DisplayBuf;
+    LayerBuf = DisplayBuf;
+    DrawRectangle(200, 150, HRes - 200 - 1, VRes - 150 - 1, 1);
+    HDMImode = SCREENMODE1;
     printf("Drawing random circles in Mode 1...\n");
     while (time_us_64() < 10000000) {
         busy_wait_us(5000);
         DrawCircle(rand() % HRes, rand() % VRes, (rand() % t) + t / 5, 1, 0, rgb(rand() % 255, rand() % 255, rand() % 255), 1);
     }
 
-    // mode 2: 320x240x16 color with layer
-    printf("Setting up Mode 2: 320x240x16 color with layer\n");
-    HDMImode = 0;
+    // Mode 2: 320x240x16 color (4bpp, RGB555 output with layer)
+    printf("Setting up Mode 2: 320x240x16 color (4bpp, RGB555 output with layer)\n");
+    HDMImode = 0; // disable output during setup
+    memset(FRAMEBUFFER, 0, MODE2SIZE);
     HRes = MODE_H_ACTIVE_PIXELS / 2;
     VRes = MODE_V_ACTIVE_LINES / 2;
     t = ((HRes > VRes) ? HRes : VRes) / 7;
     DrawRectangle = DrawRectangle16;
     LayerBuf = DisplayBuf + MODE2SIZE;
-    memset((void *)LayerBuf, 0, MODE5SIZE);
-    WriteBuf = (uint8_t *)LayerBuf;
-    HDMImode = SCREENMODE2;
+    memset(LayerBuf, 0, MODE2SIZE);
+    WriteBuf = LayerBuf;
     DrawRectangle(100, 75, HRes - 100 - 1, VRes - 75 - 1, 0xFF00);
     WriteBuf = DisplayBuf;
+    HDMImode = SCREENMODE2;
     printf("Drawing random circles in Mode 2...\n");
     while (time_us_64() < 20000000) {
         busy_wait_us(5000);
         DrawCircle(rand() % HRes, rand() % VRes, (rand() % t) + t / 5, 1, 0, rgb(rand() % 255, rand() % 255, rand() % 255), 1);
     }
 
-    // mode 3: 640x480x16 color
-    printf("Setting up Mode 3: 640x480x16 color\n");
-    HDMImode = 0;
+    // Mode 3: 640x480x16 color (4bpp, RGB555 output)
+    printf("Setting up Mode 3: 640x480x16 color (4bpp, RGB555 output)\n");
+    HDMImode = 0; // disable output during setup
+    memset(FRAMEBUFFER, 0, MODE3SIZE);
     HRes = MODE_H_ACTIVE_PIXELS;
     VRes = MODE_V_ACTIVE_LINES;
     t = ((HRes > VRes) ? HRes : VRes) / 7;
     DrawRectangle = DrawRectangle16;
     LayerBuf = DisplayBuf;
+    WriteBuf = DisplayBuf;
+    DrawRectangle(200, 150, HRes - 200 - 1, VRes - 150 - 1, 0xFF00);
     HDMImode = SCREENMODE3;
     printf("Drawing random circles in Mode 3...\n");
     while (time_us_64() < 30000000) {
@@ -932,53 +941,57 @@ int main(void) {
         DrawCircle(rand() % HRes, rand() % VRes, (rand() % t) + t / 5, 1, 0, rgb(rand() % 255, rand() % 255, rand() % 255), 1);
     }
 
-    // mode 4: 320x240x256 color
-    printf("Setting up Mode 4: 320x240x256 color\n");
-    HDMImode = 0;
+    // Mode 4: 320x240x256 color (8bpp, RGB555 output with layer)
+    printf("Setting up Mode 4: 320x240x256 color (8bpp, RGB555 output with layer)\n");
+    HDMImode = 0; // disable output during setup
+    memset(FRAMEBUFFER, 0, MODE4SIZE);
     HRes = MODE_H_ACTIVE_PIXELS / 2;
     VRes = MODE_V_ACTIVE_LINES / 2;
     t = ((HRes > VRes) ? HRes : VRes) / 7;
     DrawRectangle = DrawRectangle256;
     LayerBuf = DisplayBuf + MODE4SIZE;
-    memset((void *)LayerBuf, 0, MODE4SIZE);
-    WriteBuf = (uint8_t *)LayerBuf;
-    HDMImode = SCREENMODE4;
+    memset(LayerBuf, 0, MODE4SIZE);
+    WriteBuf = LayerBuf;
     DrawRectangle(100, 75, HRes - 100 - 1, VRes - 75 - 1, 0xFF);
     WriteBuf = DisplayBuf;
+    HDMImode = SCREENMODE4;
     printf("Drawing random circles in Mode 4...\n");
     while (time_us_64() < 40000000) {
         busy_wait_us(5000);
         DrawCircle(rand() % HRes, rand() % VRes, (rand() % t) + t / 5, 1, 0, rgb(rand() % 255, rand() % 255, rand() % 255), 1);
     }
 
-    // mode 5: 640x480x4 color
-    printf("Setting up Mode 5: 640x480x4 color\n");
-    HDMImode = 0;
+    // Mode 5: 640x480x4 color (2bpp, RGB555 output with layer)
+    printf("Setting up Mode 5: 640x480x4 color (2bpp, RGB555 output with layer)\n");
+    HDMImode = 0; // disable output during setup
+    memset(FRAMEBUFFER, 0, MODE5SIZE);
     HRes = MODE_H_ACTIVE_PIXELS;
     VRes = MODE_V_ACTIVE_LINES;
     t = ((HRes > VRes) ? HRes : VRes) / 7;
     DrawRectangle = DrawRectangle4;
     LayerBuf = DisplayBuf + MODE5SIZE;
-    memset((void *)LayerBuf, 0, MODE5SIZE);
-    WriteBuf = (uint8_t *)LayerBuf;
-    HDMImode = SCREENMODE5;
+    memset(LayerBuf, 0, MODE5SIZE);
+    WriteBuf = LayerBuf;
     DrawRectangle(200, 150, HRes - 200 - 1, VRes - 150 - 1, 0xFF0000);
     WriteBuf = DisplayBuf;
+    HDMImode = SCREENMODE5;
     printf("Drawing random circles in Mode 5...\n");
     while (time_us_64() < 50000000) {
         busy_wait_us(5000);
         DrawCircle(rand() % HRes, rand() % VRes, (rand() % t) + t / 5, 1, 0, rgb(rand() % 255, rand() % 255, rand() % 255), 1);
     }
 
-    // mode 6: 320x240xrgb555 color
-    printf("Setting up Mode 6: 320x240xRGB555 color\n");
-    HDMImode = 0;
+    // Mode 6: 320x240xRGB555 color (16bpp, RGB555 output)
+    printf("Setting up Mode 6: 320x240xRGB555 color (16bpp, RGB555 output)\n");
+    HDMImode = 0; // disable output during setup
+    memset(FRAMEBUFFER, 0, MODE6SIZE);
     HRes = MODE_H_ACTIVE_PIXELS / 2;
     VRes = MODE_V_ACTIVE_LINES / 2;
     t = ((HRes > VRes) ? HRes : VRes) / 7;
     DrawRectangle = DrawRectangle555;
     LayerBuf = DisplayBuf;
     WriteBuf = DisplayBuf;
+    DrawRectangle(100, 75, HRes - 100 - 1, VRes - 75 - 1, 0xFFFFFF);
     HDMImode = SCREENMODE6;
     printf("Drawing random circles in Mode 6...\n");
     while (time_us_64() < 60000000) {
@@ -986,7 +999,7 @@ int main(void) {
         DrawCircle(rand() % HRes, rand() % VRes, (rand() % t) + t / 5, 1, 0, rgb(rand() % 255, rand() % 255, rand() % 255), 1);
     }
 
-    printf("All display modes complete\n");
+    printf("\nAll display modes complete\n");
 
     // infinite loop
     while (1) { ; }
