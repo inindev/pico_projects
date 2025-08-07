@@ -10,6 +10,7 @@
 #include "hardware/structs/bus_ctrl.h"
 #include "hardware/structs/hstx_ctrl.h"
 #include "hardware/structs/hstx_fifo.h"
+#include "hardware/uart.h"
 #include "hardware/vreg.h"
 #include "pico/multicore.h"
 #include "pico/stdlib.h"
@@ -63,14 +64,14 @@ volatile int HDMImode = 0;
 
 // color map for 16 colors
 const uint32_t MAP16DEF[16] = {
-    0x000080, // navy blue
+    0x000080, // navy blue (index 0)
     0xFF0000, // full red
     0x00FF00, // full green
     0x0000FF, // full blue
     0x00FFFF, // full cyan
     0xFF00FF, // full magenta
     0xFFFF00, // full yellow
-    0xFFFFFF, // white
+    0xFFFFFF, // white (index 7)
     0x000000, // black
     0x7F0000, // mid red
     0x007F00, // mid green
@@ -112,16 +113,30 @@ static uint32_t vactive_line[] = {
 // dma logic
 #define DMACH_PING 0
 #define DMACH_PONG 1
+
+// cursor position
+static int cursor_x = 0;
+static int cursor_y = 0;
+
+// track which dma channel is active (ping or pong)
 static bool dma_pong = false;
+
+// track current scanline, starting at 2 (third scanline, zero-based)
 volatile uint v_scanline = 2;
+
+// flag to track if command list is posted during active period
 static bool vactive_cmdlist_posted = false;
 volatile uint vblank = 0;
 
+// dma interrupt handler to manage scanline data
 void __not_in_flash_func(dma_irq_handler)() {
+    // determine which channel just finished
     uint ch_num = dma_pong ? DMACH_PONG : DMACH_PING;
     dma_channel_hw_t *ch = &dma_hw->ch[ch_num];
     dma_hw->intr = 1u << ch_num;
     dma_pong = !dma_pong;
+
+    // configure next transfer based on scanline
     if (v_scanline >= MODE_V_FRONT_PORCH && v_scanline < (MODE_V_FRONT_PORCH + MODE_V_SYNC_WIDTH)) {
         ch->read_addr = (uintptr_t)vblank_line_vsync_on;
         ch->transfer_count = count_of(vblank_line_vsync_on);
@@ -140,6 +155,8 @@ void __not_in_flash_func(dma_irq_handler)() {
         ch->transfer_count = MODE_H_ACTIVE_PIXELS / 2;
         vactive_cmdlist_posted = false;
     }
+
+    // increment scanline if command list was posted
     if (!vactive_cmdlist_posted) {
         v_scanline = (v_scanline + 1) % MODE_V_TOTAL_LINES;
     }
@@ -162,12 +179,15 @@ void __not_in_flash_func(HDMICore)(void) {
         7 << HSTX_CTRL_EXPAND_TMDS_L2_ROT_LSB |
         4 << HSTX_CTRL_EXPAND_TMDS_L2_NBITS_LSB;
 
+    // configure pixel and control symbol shifting
     hstx_ctrl_hw->expand_shift =
         2 << HSTX_CTRL_EXPAND_SHIFT_ENC_N_SHIFTS_LSB |
         16 << HSTX_CTRL_EXPAND_SHIFT_ENC_SHIFT_LSB |
         1 << HSTX_CTRL_EXPAND_SHIFT_RAW_N_SHIFTS_LSB |
         0 << HSTX_CTRL_EXPAND_SHIFT_RAW_SHIFT_LSB;
 
+    // configure serial output
+    hstx_ctrl_hw->csr = 0;
     hstx_ctrl_hw->csr =
         HSTX_CTRL_CSR_EXPAND_EN_BITS |
         5u << HSTX_CTRL_CSR_CLKDIV_LSB |
@@ -236,22 +256,20 @@ void DrawRectangle16(int x1, int y1, int x2, int y2, int c) {
     int x, y, x1p, x2p, t;
     unsigned char color = c & 0x0F; // Extract 4-bit color index
     unsigned char bcolor = (color << 4) | color;
-
     if (x1 < 0) x1 = 0;
-    if (x1 >= MODE_H_ACTIVE_PIXELS) x1 = MODE_H_ACTIVE_PIXELS - 1;
+    if (x1 >= HRes) x1 = HRes - 1;
     if (x2 < 0) x2 = 0;
-    if (x2 >= MODE_H_ACTIVE_PIXELS) x2 = MODE_H_ACTIVE_PIXELS - 1;
+    if (x2 >= HRes) x2 = HRes - 1;
     if (y1 < 0) y1 = 0;
-    if (y1 >= MODE_V_ACTIVE_LINES) y1 = MODE_V_ACTIVE_LINES - 1;
+    if (y1 >= VRes) y1 = VRes - 1;
     if (y2 < 0) y2 = 0;
-    if (y2 >= MODE_V_ACTIVE_LINES) y2 = MODE_V_ACTIVE_LINES - 1;
+    if (y2 >= VRes) y2 = VRes - 1;
     if (x2 <= x1) { t = x1; x1 = x2; x2 = t; }
     if (y2 <= y1) { t = y1; y1 = y2; y2 = t; }
-
     for (y = y1; y <= y2; y++) {
         x1p = x1;
         x2p = x2;
-        uint8_t *p = FRAMEBUFFER + (y * (MODE_H_ACTIVE_PIXELS >> 1)) + (x1 >> 1);
+        uint8_t *p = WriteBuf + (y * (HRes >> 1)) + (x1 >> 1);
         if ((x1 % 2) == 1) {
             *p &= 0x0F;
             *p |= (color << 4);
@@ -259,7 +277,7 @@ void DrawRectangle16(int x1, int y1, int x2, int y2, int c) {
             x1p++;
         }
         if ((x2 % 2) == 0) {
-            uint8_t *q = FRAMEBUFFER + (y * (MODE_H_ACTIVE_PIXELS >> 1)) + (x2 >> 1);
+            uint8_t *q = WriteBuf + (y * (HRes >> 1)) + (x2 >> 1);
             *q &= 0xF0;
             *q |= color;
             x2p--;
@@ -321,15 +339,41 @@ void DrawString16(int x, int y, const char *str, int fg_color, int bg_color) {
     }
 }
 
+void display_char(char c) {
+    // handle special characters
+    if (c == '\n' || c == '\r') {
+        cursor_x = 0;
+        cursor_y += 14; // move to next line
+        if (cursor_y >= VRes) {
+            cursor_y = 0; // wrap to top of screen
+            memset(WriteBuf, 0, MODE3SIZE); // clear screen
+        }
+        return;
+    }
+    
+    // display printable character
+    if (cursor_x + 8 <= HRes) {
+        DrawChar16(cursor_x, cursor_y, c, 7, 0); // white (7) on navy (0)
+        cursor_x += 8; // advance cursor
+    }
+    
+    // wrap to next line if end of line reached
+    if (cursor_x + 8 > HRes) {
+        cursor_x = 0;
+        cursor_y += 14;
+        if (cursor_y >= VRes) {
+            cursor_y = 0; // wrap to top
+            memset(WriteBuf, 0, MODE3SIZE); // clear screen
+        }
+    }
+}
+
 int main(void) {
     // configure system voltage and clock
     vreg_set_voltage(VREG_VOLTAGE_1_30);
     set_sys_clock_khz(clockspeed, false);
     clock_configure(clk_peri, 0, CLOCKS_CLK_PERI_CTRL_AUXSRC_VALUE_CLKSRC_PLL_SYS, clockspeed * 1000, clockspeed * 1000);
     clock_configure(clk_hstx, 0, CLOCKS_CLK_PERI_CTRL_AUXSRC_VALUE_CLKSRC_PLL_SYS, clockspeed * 1000, clockspeed / clockdivisor * 1000);
-
-    // initialize stdio for serial io
-    stdio_init_all();
 
     HRes = MODE_H_ACTIVE_PIXELS;
     VRes = MODE_V_ACTIVE_LINES;
