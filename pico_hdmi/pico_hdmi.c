@@ -9,6 +9,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "font_8x14.h"
 #include "hardware/clocks.h"
 #include "hardware/dma.h"
 #include "hardware/gpio.h"
@@ -553,6 +554,57 @@ void DrawCircle(int x, int y, int radius, int w, int c, int fill, MMFLOAT aspect
     }
 }
 
+// draw a character in 16-color mode
+void DrawChar16(int x, int y, char c, int fg_color, int bg_color) {
+    unsigned char *font_data = font_8x14[(unsigned char)c];
+    int i, j;
+    unsigned char color;
+
+    // use 4-bit color indices directly
+    unsigned char fg = fg_color & 0x0F;
+    unsigned char bg = bg_color & 0x0F;
+
+    // iterate over 14 rows of the character
+    for (i = 0; i < 14; i++) {
+        if (y + i < 0 || y + i >= VRes) continue; // skip if out of bounds
+        uint8_t *p = WriteBuf + ((y + i) * (HRes >> 1)) + (x >> 1);
+        unsigned char row = font_data[i];
+
+        // handle partial first byte if x is odd
+        if (x & 1) {
+            *p &= 0x0F; // clear high nibble
+            *p |= (row & 0x80 ? fg : bg) << 4; // set high nibble
+            p++;
+            row <<= 1;
+        }
+
+        // draw full bytes (two pixels per byte)
+        for (j = x & 1; j < 8 && x + j < HRes; j += 2) {
+            color = ((row & 0x80) ? fg : bg) | (((row & 0x40) ? fg : bg) << 4);
+            if (x + j < HRes - 1) *p++ = color;
+            row <<= 2;
+        }
+
+        // handle partial last byte if needed
+        if (!(x & 1) && (x + j - 1 < HRes) && j < 8) {
+            *p &= 0xF0; // clear low nibble
+            *p |= (row & 0x80) ? fg : bg; // set low nibble
+        }
+    }
+}
+
+// draw a string in 16-color mode
+void DrawString16(int x, int y, const char *str, int fg_color, int bg_color) {
+    int x_pos = x;
+    while (*str) {
+        if (x_pos + 8 <= HRes) { // ensure character fits within horizontal resolution
+            DrawChar16(x_pos, y, *str, fg_color, bg_color);
+        }
+        x_pos += 8; // advance by character width
+        str++;
+    }
+}
+
 // ----------------------------------------------------------------------------
 // dma logic
 
@@ -616,7 +668,7 @@ void __not_in_flash_func(HDMICore)(void) {
     }
     for (int i = 0; i < 2; i++) map2[i] = RGB555(MAP2DEF[i]);
 
-    // configure hstx tmds encoder for rgb332
+    // configure hstx tmds encoder for rgb555
     hstx_ctrl_hw->expand_tmds =
         29 << HSTX_CTRL_EXPAND_TMDS_L0_ROT_LSB |
         4 << HSTX_CTRL_EXPAND_TMDS_L0_NBITS_LSB |
@@ -998,6 +1050,17 @@ int main(void) {
         busy_wait_us(5000);
         DrawCircle(rand() % HRes, rand() % VRes, (rand() % t) + t / 5, 1, 0, rgb(rand() % 255, rand() % 255, rand() % 255), 1);
     }
+
+    // set up SCREENMODE3 (640x480x16 color, 4bpp)
+    HDMImode = 0; // Disable output during setup
+    memset(FRAMEBUFFER, 0x11, MODE3SIZE); // 0x11 = two pixels of color index 1
+    HRes = MODE_H_ACTIVE_PIXELS; // 640
+    VRes = MODE_V_ACTIVE_LINES;  // 480
+    DrawRectangle = DrawRectangle16;
+    LayerBuf = DisplayBuf;
+    WriteBuf = DisplayBuf;
+    DrawString16(262, 200, "Tests Complete", 15, 1);
+    HDMImode = SCREENMODE3;
 
     printf("\nAll display modes complete\n");
 
