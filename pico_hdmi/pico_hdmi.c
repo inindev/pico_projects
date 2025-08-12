@@ -30,6 +30,16 @@
 // ----------------------------------------------------------------------------
 // dvi constants
 
+// HSTX GPIO pin definitions
+#define HSTX_GPIO_CLK_P 14  // Clock positive
+#define HSTX_GPIO_CLK_N 15  // Clock negative
+#define HSTX_GPIO_DATA0_P 12 // Data lane 0 positive
+#define HSTX_GPIO_DATA0_N 13 // Data lane 0 negative
+#define HSTX_GPIO_DATA1_P 18 // Data lane 1 positive
+#define HSTX_GPIO_DATA1_N 19 // Data lane 1 negative
+#define HSTX_GPIO_DATA2_P 16 // Data lane 2 positive
+#define HSTX_GPIO_DATA2_N 17 // Data lane 2 negative
+
 // tmds control codes for encoding
 #define TMDS_CTRL_00 0x354u
 #define TMDS_CTRL_01 0x0abu
@@ -66,7 +76,7 @@
 
 // tile and framebuffer settings
 int X_TILE = 80, Y_TILE = 40;
-uint8_t FRAMEBUFFER[MODE_H_ACTIVE_PIXELS * MODE_V_ACTIVE_LINES / 2] __attribute__((aligned(4)));
+uint8_t ALIGNED FRAMEBUFFER[MODE_H_ACTIVE_PIXELS * MODE_V_ACTIVE_LINES / 2];
 uint16_t ALIGNED HDMIlines[2][MODE_H_ACTIVE_PIXELS] = {0};
 uint8_t *WriteBuf = FRAMEBUFFER;
 uint8_t *DisplayBuf = FRAMEBUFFER;
@@ -693,23 +703,25 @@ void __not_in_flash_func(HDMICore)(void) {
         2u << HSTX_CTRL_CSR_SHIFT_LSB |
         HSTX_CTRL_CSR_EN_BITS;
 
-    // assign clock and data pins for hstx
-    hstx_ctrl_hw->bit[2] = HSTX_CTRL_BIT0_CLK_BITS;
-    hstx_ctrl_hw->bit[3] = HSTX_CTRL_BIT0_CLK_BITS | HSTX_CTRL_BIT0_INV_BITS;
-    for (uint lane = 0; lane < 3; ++lane) {
-        static const int lane_to_output_bit[3] = {0, 6, 4};
-        int bit = lane_to_output_bit[lane];
-        uint32_t lane_data_sel_bits =
-            (lane * 10) << HSTX_CTRL_BIT0_SEL_P_LSB |
-            (lane * 10 + 1) << HSTX_CTRL_BIT0_SEL_N_LSB;
-        hstx_ctrl_hw->bit[bit] = lane_data_sel_bits;
-        hstx_ctrl_hw->bit[bit + 1] = lane_data_sel_bits | HSTX_CTRL_BIT0_INV_BITS;
-    }
+    // configure hstx clock and data pins
+    hstx_ctrl_hw->bit[2] = HSTX_CTRL_BIT0_CLK_BITS;                                           // CLK_P: GPIO 14
+    hstx_ctrl_hw->bit[3] = HSTX_CTRL_BIT0_CLK_BITS | HSTX_CTRL_BIT0_INV_BITS;                 // CLK_N: GPIO 15
+    hstx_ctrl_hw->bit[0] = 0 << HSTX_CTRL_BIT0_SEL_P_LSB | 1 << HSTX_CTRL_BIT0_SEL_N_LSB;     // Lane 0: GPIO 12, 13
+    hstx_ctrl_hw->bit[1] = 0 << HSTX_CTRL_BIT0_SEL_P_LSB | 1 << HSTX_CTRL_BIT0_SEL_N_LSB | HSTX_CTRL_BIT0_INV_BITS;
+    hstx_ctrl_hw->bit[6] = 10 << HSTX_CTRL_BIT0_SEL_P_LSB | 11 << HSTX_CTRL_BIT0_SEL_N_LSB;   // Lane 1: GPIO 18, 19
+    hstx_ctrl_hw->bit[7] = 10 << HSTX_CTRL_BIT0_SEL_P_LSB | 11 << HSTX_CTRL_BIT0_SEL_N_LSB | HSTX_CTRL_BIT0_INV_BITS;
+    hstx_ctrl_hw->bit[4] = 20 << HSTX_CTRL_BIT0_SEL_P_LSB | 21 << HSTX_CTRL_BIT0_SEL_N_LSB;   // Lane 2: GPIO 16, 17
+    hstx_ctrl_hw->bit[5] = 20 << HSTX_CTRL_BIT0_SEL_P_LSB | 21 << HSTX_CTRL_BIT0_SEL_N_LSB | HSTX_CTRL_BIT0_INV_BITS;
 
-    // set gpio pins 12-19 for hstx function
-    for (int i = 12; i <= 19; ++i) {
-        gpio_set_function(i, 0); // hstx
-    }
+    // set gpio functions for hstx
+    gpio_set_function(HSTX_GPIO_CLK_P, GPIO_FUNC_HSTX);
+    gpio_set_function(HSTX_GPIO_CLK_N, GPIO_FUNC_HSTX);
+    gpio_set_function(HSTX_GPIO_DATA0_P, GPIO_FUNC_HSTX);
+    gpio_set_function(HSTX_GPIO_DATA0_N, GPIO_FUNC_HSTX);
+    gpio_set_function(HSTX_GPIO_DATA1_P, GPIO_FUNC_HSTX);
+    gpio_set_function(HSTX_GPIO_DATA1_N, GPIO_FUNC_HSTX);
+    gpio_set_function(HSTX_GPIO_DATA2_P, GPIO_FUNC_HSTX);
+    gpio_set_function(HSTX_GPIO_DATA2_N, GPIO_FUNC_HSTX);
 
     // configure dma channels for ping-pong operation
     dma_channel_config c;
