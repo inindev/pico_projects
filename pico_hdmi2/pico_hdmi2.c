@@ -12,7 +12,30 @@
 #include "pico/multicore.h"
 #include "pico/stdlib.h"
 
-#define ALIGNED __attribute__((aligned(4)))
+
+// clock configuration
+#define clockspeed 315000
+#define clockdivisor 2
+
+// dvi serialiser configuration
+#define N_TMDS_LANES 3
+struct dvi_serialiser_cfg {
+    uint sm_tmds[N_TMDS_LANES];
+    uint pins_tmds[N_TMDS_LANES];
+    uint pins_clk;
+    bool invert_diffpairs;
+};
+
+// board configurations
+static const struct dvi_serialiser_cfg pico_sock_cfg = {
+    .sm_tmds = {0, 1, 2},
+    .pins_tmds = {12, 18, 16}, // blue (d0), Red (d1), Green (d2)
+    .pins_clk = 14,            // clock
+    .invert_diffpairs = true
+};
+
+// select board configuration
+#define DVI_CFG pico_sock_cfg
 
 // dvi constants
 #define TMDS_CTRL_00 0x354u
@@ -36,23 +59,17 @@
 #define MODE_H_TOTAL_PIXELS (MODE_H_FRONT_PORCH + MODE_H_SYNC_WIDTH + MODE_H_BACK_PORCH + MODE_H_ACTIVE_PIXELS)
 #define MODE_V_TOTAL_LINES (MODE_V_FRONT_PORCH + MODE_V_SYNC_WIDTH + MODE_V_BACK_PORCH + MODE_V_ACTIVE_LINES)
 
-// clock configuration
-#define clockspeed 315000
-#define clockdivisor 2
-
 // framebuffer (640x480x4bpp = 153,600 bytes)
+#define ALIGNED __attribute__((aligned(4)))
 #define MODE3SIZE (MODE_H_ACTIVE_PIXELS * MODE_V_ACTIVE_LINES / 2)
 uint8_t ALIGNED FRAMEBUFFER[MODE3SIZE];
 uint16_t ALIGNED HDMIlines[2][MODE_H_ACTIVE_PIXELS] = {0};
-volatile int HDMImode = 0;
+static bool hdmi_enable = false;
 
 // hstx command types
 #define HSTX_CMD_RAW_REPEAT (0x1u << 12)
 #define HSTX_CMD_TMDS (0x2u << 12)
 #define HSTX_CMD_NOP (0xfu << 12)
-
-// screen mode
-#define SCREENMODE3 28
 
 // color map for 16 colors
 const uint32_t MAP16DEF[16] = {
@@ -168,22 +185,33 @@ void __not_in_flash_func(HDMICore)(void) {
         2u << HSTX_CTRL_CSR_SHIFT_LSB |
         HSTX_CTRL_CSR_EN_BITS;
 
-    // assign clock and data pins for hstx
-    hstx_ctrl_hw->bit[2] = HSTX_CTRL_BIT0_CLK_BITS;
-    hstx_ctrl_hw->bit[3] = HSTX_CTRL_BIT0_CLK_BITS | HSTX_CTRL_BIT0_INV_BITS;
-    for (uint lane = 0; lane < 3; ++lane) {
-        static const int lane_to_output_bit[3] = {0, 6, 4};
-        int bit = lane_to_output_bit[lane];
+    // assign clock and data pins for hstx using DVI_CFG
+    // find minimum gpio pin to calculate base offset
+    uint min_pin = DVI_CFG.pins_clk;
+    for (uint lane = 0; lane < N_TMDS_LANES; ++lane) {
+        if (DVI_CFG.pins_tmds[lane] < min_pin) min_pin = DVI_CFG.pins_tmds[lane];
+    }
+
+    // clock: assign to hstx bit indices based on gpio pins
+    hstx_ctrl_hw->bit[DVI_CFG.pins_clk - min_pin] = HSTX_CTRL_BIT0_CLK_BITS; // positive
+    gpio_set_function(DVI_CFG.pins_clk, 0); // clock positive
+    if (!DVI_CFG.invert_diffpairs) {
+        hstx_ctrl_hw->bit[DVI_CFG.pins_clk - min_pin + 1] = HSTX_CTRL_BIT0_CLK_BITS | HSTX_CTRL_BIT0_INV_BITS; // negative
+        gpio_set_function(DVI_CFG.pins_clk + 1, 0); // clock negative
+    }
+
+    // data lanes: assign to hstx bit indices based on gpio pins
+    for (uint lane = 0; lane < N_TMDS_LANES; ++lane) {
+        uint bit = DVI_CFG.pins_tmds[lane] - min_pin;
         uint32_t lane_data_sel_bits =
             (lane * 10) << HSTX_CTRL_BIT0_SEL_P_LSB |
             (lane * 10 + 1) << HSTX_CTRL_BIT0_SEL_N_LSB;
-        hstx_ctrl_hw->bit[bit] = lane_data_sel_bits;
-        hstx_ctrl_hw->bit[bit + 1] = lane_data_sel_bits | HSTX_CTRL_BIT0_INV_BITS;
-    }
-
-    // set gpio pins 12-19 for hstx
-    for (int i = 12; i <= 19; ++i) {
-        gpio_set_function(i, 0);
+        hstx_ctrl_hw->bit[bit] = lane_data_sel_bits; // positive
+        gpio_set_function(DVI_CFG.pins_tmds[lane], 0); // positive
+        if (!DVI_CFG.invert_diffpairs) {
+            hstx_ctrl_hw->bit[bit + 1] = lane_data_sel_bits | HSTX_CTRL_BIT0_INV_BITS; // negative
+            gpio_set_function(DVI_CFG.pins_tmds[lane] + 1, 0); // negative
+        }
     }
 
     // configure dma channels
@@ -192,6 +220,7 @@ void __not_in_flash_func(HDMICore)(void) {
     channel_config_set_chain_to(&c, DMACH_PONG);
     channel_config_set_dreq(&c, DREQ_HSTX);
     dma_channel_configure(DMACH_PING, &c, &hstx_fifo_hw->fifo, vblank_line_vsync_off, count_of(vblank_line_vsync_off), false);
+
     c = dma_channel_get_default_config(DMACH_PONG);
     channel_config_set_chain_to(&c, DMACH_PING);
     channel_config_set_dreq(&c, DREQ_HSTX);
@@ -206,13 +235,13 @@ void __not_in_flash_func(HDMICore)(void) {
     dma_channel_start(DMACH_PING);
 
     // process scanlines
-    while (1) {
+    for(;;) {
         if (v_scanline != last_line) {
             last_line = v_scanline;
             load_line = v_scanline - (MODE_V_TOTAL_LINES - MODE_V_ACTIVE_LINES);
             line_to_load = last_line & 1;
             uint16_t *p = HDMIlines[line_to_load];
-            if (load_line >= 0 && load_line < MODE_V_ACTIVE_LINES && HDMImode == SCREENMODE3) {
+            if (load_line >= 0 && load_line < MODE_V_ACTIVE_LINES && hdmi_enable) {
                 __dmb();
                 for (int i = 0; i < MODE_H_ACTIVE_PIXELS / 2; i++) {
                     int d = FRAMEBUFFER[load_line * MODE_H_ACTIVE_PIXELS / 2 + i];
@@ -227,7 +256,7 @@ void __not_in_flash_func(HDMICore)(void) {
 
 void DrawRectangle16(int x1, int y1, int x2, int y2, int c) {
     int x, y, x1p, x2p, t;
-    unsigned char color = c & 0x0F; // Extract 4-bit color index
+    unsigned char color = c & 0x0F; // extract 4-bit color index
     unsigned char bcolor = (color << 4) | color;
 
     if (x1 < 0) x1 = 0;
@@ -270,12 +299,12 @@ int main(void) {
     clock_configure(clk_peri, 0, CLOCKS_CLK_PERI_CTRL_AUXSRC_VALUE_CLKSRC_PLL_SYS, clockspeed * 1000, clockspeed * 1000);
     clock_configure(clk_hstx, 0, CLOCKS_CLK_PERI_CTRL_AUXSRC_VALUE_CLKSRC_PLL_SYS, clockspeed * 1000, clockspeed / clockdivisor * 1000);
 
-    HDMImode = 0;
+    hdmi_enable = false;
 
     // fill framebuffer with navy blue (index 0)
     memset(FRAMEBUFFER, 0, MODE3SIZE);
 
-    // Draw 4x4 grid of 160x120 boxes, each with a unique color index (0-15)
+    // draw 4x4 grid of 160x120 boxes, each with a unique color index (0-15)
     for (int y = 0; y < 4; y++) {
         for (int x = 0; x < 4; x++) {
             DrawRectangle16(x * 160, y * 120, x * 160 + 159, y * 120 + 119, y * 4 + x);
@@ -283,7 +312,7 @@ int main(void) {
     }
 
     // start hdmi output
-    HDMImode = SCREENMODE3;
+    hdmi_enable = true;
     multicore_launch_core1_with_stack(HDMICore, core1stack, 512);
 
     // infinite loop
