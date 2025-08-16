@@ -36,11 +36,6 @@ target_include_directories(pico_hdmi2 PRIVATE
     ${PICO_SDK_PATH}/src/rp2350/hardware_regs/include
 )
 
-# define boot stage
-pico_define_boot_stage2(slower_boot2 ${PICO_DEFAULT_BOOT_STAGE2_FILE})
-target_compile_definitions(slower_boot2 PRIVATE PICO_FLASH_SPI_CLKDIV=4)
-pico_set_boot_stage2(pico_hdmi2 slower_boot2)
-
 # enable usb output, disable uart
 pico_enable_stdio_usb(pico_hdmi2 1)
 pico_enable_stdio_uart(pico_hdmi2 0)
@@ -50,11 +45,6 @@ pico_set_printf_implementation(pico_hdmi2 compiler)
 
 # compile options
 target_compile_options(pico_hdmi2 PRIVATE
-    -DPICOMITE
-    -DNDEBUG
-    -Drp2350
-    -DPICO_XOSC_STARTUP_DELAY_MULTIPLIER=64
-    -DPICO_FLASH_SIZE_BYTES=4194304
     -O3
     -Wall
 )
