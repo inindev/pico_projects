@@ -1,10 +1,3 @@
-# pico_projects/text_display/CMakeLists.txt
-#
-# this example requires an external digital video connector connected to
-# gpios 12 through 19 (hstx-capable gpios) with appropriate
-# current-limiting resistors, e.g., 270 ohms. the pinout matches the
-# pico dvi sock board: https://github.com/wren6991/pico-dvi-sock
-
 cmake_minimum_required(VERSION 3.13)
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_CXX_STANDARD 17)
@@ -25,38 +18,18 @@ include($ENV{PICO_SDK_PATH}/pico_sdk_init.cmake)
 project(text_display C CXX ASM)
 pico_sdk_init()
 
+# libdvi
+add_subdirectory(libdvi)
+
 add_executable(text_display
     text_display.c
+    dhgr_patterns.h
 )
 
 # include directories
 target_include_directories(text_display PRIVATE
-    ${CMAKE_CURRENT_LIST_DIR}/images
-    ${PICO_SDK_PATH}/src/rp2350/hardware_structs/include
-    ${PICO_SDK_PATH}/src/rp2350/hardware_regs/include
-)
-
-# define boot stage
-pico_define_boot_stage2(slower_boot2 ${PICO_DEFAULT_BOOT_STAGE2_FILE})
-target_compile_definitions(slower_boot2 PRIVATE PICO_FLASH_SPI_CLKDIV=4)
-pico_set_boot_stage2(text_display slower_boot2)
-
-# enable usb output, disable uart
-pico_enable_stdio_usb(text_display 1)
-pico_enable_stdio_uart(text_display 0)
-
-# set printf implementation
-pico_set_printf_implementation(text_display compiler)
-
-# compile options
-target_compile_options(text_display PRIVATE
-    -DPICOMITE
-    -DNDEBUG
-    -Drp2350
-    -DPICO_XOSC_STARTUP_DELAY_MULTIPLIER=64
-    -DPICO_FLASH_SIZE_BYTES=4194304
-    -O3
-    -Wall
+    ${CMAKE_CURRENT_LIST_DIR}
+    ${CMAKE_CURRENT_LIST_DIR}/libdvi
 )
 
 # link libraries
@@ -64,8 +37,20 @@ target_link_libraries(text_display
     pico_stdlib
     pico_multicore
     hardware_dma
-    pico_sync
+    libdvi  # PicoDVI library
 )
+
+# define dvi-specific compile options
+target_compile_definitions(text_display PRIVATE
+    DVI_DEFAULT_SERIAL_CONFIG=pico2_dvi_config
+    PICO_SCANVIDEO_COLOR_PIN_COUNT=4  # 4 bpp
+    PICO_SCANVIDEO_PIXEL_WIDTH=720
+    PICO_SCANVIDEO_PIXEL_HEIGHT=480
+)
+
+# enable usb output, disable uart
+pico_enable_stdio_usb(text_display 1)
+pico_enable_stdio_uart(text_display 0)
 
 # generate extra outputs
 pico_add_extra_outputs(text_display)
