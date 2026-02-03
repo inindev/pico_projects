@@ -27,7 +27,7 @@ pico_sdk_init()
 add_library(hagl_hal INTERFACE)
 target_sources(hagl_hal INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/ili9488/hagl_hal.c)
 target_include_directories(hagl_hal INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/ili9488)
-target_link_libraries(hagl_hal INTERFACE pico_stdlib hardware_spi)
+target_link_libraries(hagl_hal INTERFACE pico_stdlib hardware_spi hardware_dma)
 
 # hagl library
 add_subdirectory(ili9488/hagl)
@@ -41,8 +41,12 @@ add_executable(
 target_link_libraries(
     pico_6502
     pico_stdlib
+    pico_multicore
     hardware_pwm
     hardware_spi
+    hardware_dma
+    hardware_clocks
+    hardware_vreg
     hagl
 )
 

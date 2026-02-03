@@ -15,7 +15,7 @@
 
 // Program-specific overrides
 #define PROGRAM_VIDEO_BASE 0x0200
-#define PROGRAM_CLK_FREQ_KHZ 50000
+#define PROGRAM_CLK_FREQ_KHZ 1000
 
 // Custom plasma palette - smooth rainbow gradient for best effect
 static const uint32_t plasma_palette[16] = {

@@ -8,12 +8,12 @@
 
 #pragma once
 
+#include <cstdint>
+#include <cstddef>
+
 // Program-specific overrides
 #define PROGRAM_VIDEO_BASE 0x0200
 #define PROGRAM_CLK_FREQ_KHZ 5000
-
-#include <cstdint>
-#include <cstddef>
 
 // Load address for this program
 inline constexpr uint16_t program_load_addr = 0x0600;

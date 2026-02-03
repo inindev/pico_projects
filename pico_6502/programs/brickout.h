@@ -9,12 +9,33 @@
 
 #pragma once
 
+#include <cstdint>
+#include <cstddef>
+
 // Program-specific overrides
 #define PROGRAM_VIDEO_BASE 0x0200
 #define PROGRAM_CLK_FREQ_KHZ 50
 
-#include <cstdint>
-#include <cstddef>
+// Brickout "Neon Arcade" palette (RGB888)
+static const uint32_t brickout_palette[16] = {
+    0x100020, // 0: Deep Purple/Black (Background)
+    0xe0e0e0, // 1: Light Gray (Ball)
+    0x636363, // 2: Dark Gray (Walls)
+    0x178ce0, // 3: Light Blue (Brick Row 1)
+    0x30d641, // 4: Lime Green (Brick Row 2)
+    0xf2cd26, // 5: Gold (Brick Row 3)
+    0xe02427, // 6: Light Red (Brick Row 4)
+    0x000000, // 7: unused
+    0x000000, // 8: unused
+    0x000000, // 9: unused
+    0x000000, // A: unused
+    0x000000, // B: unused
+    0x000000, // C: unused
+    0x000000, // D: unused
+    0x000000, // E: unused
+    0x000000  // F: unused
+ };
+#define PROGRAM_PALETTE brickout_palette
 
 // Load address for this program
 inline constexpr uint16_t program_load_addr = 0x0600;

@@ -5,6 +5,7 @@
 #include <string.h>
 #include "pico/stdlib.h"
 #include "hardware/spi.h"
+#include "hardware/dma.h"
 #include "hagl_hal.h"
 #include "hagl.h"
 #include "hagl/bitmap.h"
@@ -132,13 +133,37 @@ static size_t hal_flush(void *self) {
 }
 
 /*
- * Fast scaled framebuffer blit for 6502 emulator
+ * Fast scaled framebuffer blit for 6502 emulator using DMA
  * Blits a 32x32 4-bit framebuffer scaled to 320x320 at (x0, y0)
  * palette is 16 RGB888 colors, fb is 1024 bytes (4-bit indices)
+ *
+ * Uses double buffering: builds scanline N+1 while DMA sends scanline N
  */
 
-// Line buffer for batched SPI writes (32 pixels * 10 scale * 3 bytes = 960 bytes)
-static uint8_t line_buf[32 * 10 * 3];
+// Double line buffer for DMA overlap (32 pixels * 10 scale * 3 bytes = 960 bytes each)
+static uint8_t line_buf[2][32 * 10 * 3];
+static int dma_chan = -1;
+static dma_channel_config dma_cfg;
+
+// Build a scaled scanline into the specified buffer
+static inline void build_scanline(uint8_t *buf, uint16_t y,
+                                   const uint8_t *fb, const uint32_t *palette,
+                                   uint8_t scale) {
+    uint8_t *p = buf;
+    for (uint16_t x = 0; x < 32; x++) {
+        uint8_t color_idx = fb[y * 32 + x] & 0x0F;
+        uint32_t rgb = palette[color_idx];
+        uint8_t r = (rgb >> 16) & 0xFF;
+        uint8_t g = (rgb >> 8) & 0xFF;
+        uint8_t b = rgb & 0xFF;
+
+        for (uint8_t sx = 0; sx < scale; sx++) {
+            *p++ = r;
+            *p++ = g;
+            *p++ = b;
+        }
+    }
+}
 
 void hagl_hal_blit_fb32(int16_t x0, int16_t y0, uint8_t scale,
                         const uint8_t *fb, const uint32_t *palette) {
@@ -148,6 +173,16 @@ void hagl_hal_blit_fb32(int16_t x0, int16_t y0, uint8_t scale,
     uint16_t scaled_h = fb_height * scale;
     uint16_t line_bytes = scaled_w * 3;
 
+    // Lazy init DMA channel
+    if (dma_chan < 0) {
+        dma_chan = dma_claim_unused_channel(true);
+        dma_cfg = dma_channel_get_default_config(dma_chan);
+        channel_config_set_transfer_data_size(&dma_cfg, DMA_SIZE_8);
+        channel_config_set_dreq(&dma_cfg, spi_get_dreq(SPI_INST, true));
+        channel_config_set_read_increment(&dma_cfg, true);
+        channel_config_set_write_increment(&dma_cfg, false);
+    }
+
     // Set address window once for entire blit area
     set_addr_window(x0, y0, x0 + scaled_w - 1, y0 + scaled_h - 1);
 
@@ -155,28 +190,38 @@ void hagl_hal_blit_fb32(int16_t x0, int16_t y0, uint8_t scale,
     gpio_put(PIN_CS, 0);
     gpio_put(PIN_DC, 1);
 
+    int cur_buf = 0;
+
+    // Pre-build first scanline
+    build_scanline(line_buf[cur_buf], 0, fb, palette, scale);
+
     for (uint16_t y = 0; y < fb_height; y++) {
-        // Build one scaled scanline into buffer
-        uint8_t *p = line_buf;
-        for (uint16_t x = 0; x < fb_width; x++) {
-            uint8_t color_idx = fb[y * fb_width + x] & 0x0F;
-            uint32_t rgb = palette[color_idx];
-            uint8_t r = (rgb >> 16) & 0xFF;
-            uint8_t g = (rgb >> 8) & 0xFF;
-            uint8_t b = rgb & 0xFF;
+        int next_buf = 1 - cur_buf;
 
-            // Repeat pixel 'scale' times horizontally
-            for (uint8_t sx = 0; sx < scale; sx++) {
-                *p++ = r;
-                *p++ = g;
-                *p++ = b;
-            }
-        }
-
-        // Send the same scanline 'scale' times (vertical scaling)
+        // Send current scanline 'scale' times (vertical scaling)
         for (uint8_t sy = 0; sy < scale; sy++) {
-            spi_write_blocking(SPI_INST, line_buf, line_bytes);
+            // Start DMA transfer
+            dma_channel_configure(dma_chan, &dma_cfg,
+                                  &spi_get_hw(SPI_INST)->dr,  // Write to SPI TX FIFO
+                                  line_buf[cur_buf],          // Read from line buffer
+                                  line_bytes,                 // Transfer count
+                                  true);                      // Start immediately
+
+            // While DMA runs, build next scanline (only on first iteration)
+            if (sy == 0 && y + 1 < fb_height) {
+                build_scanline(line_buf[next_buf], y + 1, fb, palette, scale);
+            }
+
+            // Wait for DMA to complete
+            dma_channel_wait_for_finish_blocking(dma_chan);
         }
+
+        cur_buf = next_buf;
+    }
+
+    // Wait for SPI to fully drain before releasing CS
+    while (spi_is_busy(SPI_INST)) {
+        tight_loop_contents();
     }
 
     gpio_put(PIN_CS, 1);
@@ -189,7 +234,7 @@ static void hal_close(void *self) {
 
 /* Initialize display hardware */
 static void init_display_hw(void) {
-    spi_init(SPI_INST, 65 * 1000 * 1000);
+    spi_init(SPI_INST, 50 * 1000 * 1000);
     gpio_set_function(PIN_MOSI, GPIO_FUNC_SPI);
     gpio_set_function(PIN_SCK, GPIO_FUNC_SPI);
 

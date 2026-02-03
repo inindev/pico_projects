@@ -10,18 +10,22 @@
 //
 
 #include "pico/stdlib.h"
+#include "pico/multicore.h"
 #include "hardware/structs/rosc.h"
+#include "hardware/clocks.h"
+#include "hardware/vreg.h"
 #include "w65c02s.hpp"
 #include "ram.hpp"
 #include "hagl.h"
 #include "hagl_hal.h"
 #include "palette.h"
 
-//#include "programs/color_cycle.h"
 //#include "programs/adventure.h"
 //#include "programs/alive.h"
-//#include "programs/brickout.h"
-#include "programs/plasma.h"
+#include "programs/brickout.h"
+//#include "programs/color_cycle.h"
+//#include "programs/fire.h"
+//#include "programs/plasma.h"
 
 
 // ============================================================================
@@ -55,9 +59,10 @@ static constexpr uint16_t PIXEL_SCALE = 10;     // Each pixel = 10x10 on display
 static constexpr uint16_t VIEWPORT_X = 80;      // Center 320x320 in 480x320
 static constexpr uint16_t VIEWPORT_Y = 0;
 
-// Shadow framebuffer for batched display updates
-static uint8_t framebuffer[VIDEO_SIZE];
-static bool fb_dirty = false;
+// Shadow framebuffer for batched display updates (shared between cores)
+static volatile uint8_t framebuffer[VIDEO_SIZE];
+static volatile bool fb_dirty = false;
+static volatile bool cpu_running = true;
 
 // Emulated CPU frequency (in Hz)
 // 1000 = 1 kHz, 1000000 = 1 MHz, 3000000 = 3 MHz, etc.
@@ -90,11 +95,22 @@ static void video_write_hook(uint16_t addr, uint8_t val) {
 
 // Refresh display from framebuffer (fast path using direct SPI blit)
 static void refresh_display() {
-    if (!fb_dirty) return;
-    fb_dirty = false;
-
     // Use optimized HAL function - single window setup, streamed pixels
-    hagl_hal_blit_fb32(VIEWPORT_X, VIEWPORT_Y, PIXEL_SCALE, framebuffer, PROGRAM_PALETTE);
+    // Cast away volatile for the blit function (safe: core1 is the only reader)
+    hagl_hal_blit_fb32(VIEWPORT_X, VIEWPORT_Y, PIXEL_SCALE,
+                       (const uint8_t*)framebuffer, PROGRAM_PALETTE);
+}
+
+// Core 1: Dedicated display refresh loop
+void core1_entry() {
+    while (cpu_running) {
+        if (fb_dirty) {
+            fb_dirty = false;
+            refresh_display();
+        }
+        // Small yield to avoid hammering the flag
+        tight_loop_contents();
+    }
 }
 
 void init_display() {
@@ -106,6 +122,18 @@ void init_display() {
 }
 
 int main() {
+    // Overclock to 200 MHz for faster SPI (allows 50 MHz SPI clock)
+    vreg_set_voltage(VREG_VOLTAGE_1_15);
+    sleep_ms(10);
+    set_sys_clock_khz(200000, true);
+
+    // Set peripheral clock to system clock (needed for fast SPI)
+    clock_configure(clk_peri,
+                    0,
+                    CLOCKS_CLK_PERI_CTRL_AUXSRC_VALUE_CLK_SYS,
+                    200 * 1000 * 1000,
+                    200 * 1000 * 1000);
+
     init_display();
 
     // Set up RAM with hooks
@@ -133,14 +161,13 @@ int main() {
     cpu.reset();
     cpu.reg.pc = ram.read_word(0xFFFC);
 
-    // Cycle-accurate timing
+    // Launch Core 1 for display refresh
+    multicore_launch_core1(core1_entry);
+
+    // Core 0: Cycle-accurate CPU emulation
     // Track total cycles executed and compare against wall-clock time
     uint64_t total_cycles = 0;
     uint64_t start_time_us = time_us_64();
-
-    // Display refresh timing (target ~30 FPS = 33333 us per frame)
-    constexpr uint64_t REFRESH_INTERVAL_US = 33333;
-    uint64_t next_refresh_us = start_time_us + REFRESH_INTERVAL_US;
 
     while (!cpu.halted) {
         // Execute one instruction and get cycle count
@@ -149,17 +176,6 @@ int main() {
 
         // Calculate when these cycles should complete at target frequency
         uint64_t target_time_us = start_time_us + (total_cycles * 1000000ULL / CPU_FREQ_HZ);
-        uint64_t now = time_us_64();
-
-        // Refresh display at fixed interval (account for refresh time in timing)
-        if (now >= next_refresh_us) {
-            uint64_t before_refresh = time_us_64();
-            refresh_display();
-            uint64_t refresh_duration = time_us_64() - before_refresh;
-            // Adjust timing to account for display refresh overhead
-            start_time_us += refresh_duration;
-            next_refresh_us = time_us_64() + REFRESH_INTERVAL_US;
-        }
 
         // Wait for cycle timing (only if we're ahead)
         while (time_us_64() < target_time_us) {
@@ -167,7 +183,8 @@ int main() {
         }
     }
 
-    // CPU halted (STP instruction)
+    // CPU halted (STP instruction) - signal Core 1 to stop
+    cpu_running = false;
     while (true) {
         sleep_ms(1000);
     }
