@@ -19,10 +19,11 @@
 #include "hagl.h"
 #include "hagl_hal.h"
 #include "palette.h"
+#include "usb_keyboard.h"
 
-//#include "programs/adventure.h"
+#include "programs/adventure.h"
 //#include "programs/alive.h"
-#include "programs/brickout.h"
+//#include "programs/brickout.h"
 //#include "programs/color_cycle.h"
 //#include "programs/fire.h"
 //#include "programs/plasma.h"
@@ -72,8 +73,14 @@ static constexpr uint32_t CPU_FREQ_HZ = PROGRAM_CLK_FREQ_KHZ * 1000;
 static HookedRam ram;
 static W65C02S cpu;
 
-// Read hook: return random byte when $FE is read
-static uint8_t random_read_hook(uint16_t addr) {
+// Read hook for page 0: keyboard input ($FF) and random byte ($FE)
+// $FF: Returns next character from keyboard buffer (0 if empty)
+// $FE: Returns random byte from ROSC
+static uint8_t page0_read_hook(uint16_t addr) {
+    if (addr == 0x00FF) {
+        // Keyboard input - return next character from buffer
+        return usb_keyboard_getchar();
+    }
     if (addr == 0x00FE) {
         // Generate 8-bit random value from ROSC random bits
         uint8_t val = 0;
@@ -136,10 +143,13 @@ int main() {
 
     init_display();
 
+    // Initialize USB keyboard
+    usb_keyboard_init();
+
     // Set up RAM with hooks
     HookedRam::set_instance(&ram);
     ram.set_write_hook(VIDEO_BASE, VIDEO_BASE + VIDEO_SIZE - 1, video_write_hook);
-    ram.set_read_hook(0x00, random_read_hook);  // $FE returns random byte (page 0)
+    ram.set_read_hook(0x00, page0_read_hook);  // $FE=random, $FF=keyboard (page 0)
 
     // Connect CPU to RAM
     cpu.ram_read = &HookedRam::static_read;
@@ -173,6 +183,11 @@ int main() {
         // Execute one instruction and get cycle count
         int cycles = cpu.step();
         total_cycles += cycles;
+
+        // Poll USB keyboard periodically (every ~1000 cycles)
+        if ((total_cycles & 0x3FF) == 0) {
+            usb_keyboard_task();
+        }
 
         // Calculate when these cycles should complete at target frequency
         uint64_t target_time_us = start_time_us + (total_cycles * 1000000ULL / CPU_FREQ_HZ);

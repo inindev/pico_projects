@@ -36,7 +36,11 @@ add_executable(
     pico_6502
     main.cpp
     ili9488/hagl_hal.c
+    usb_keyboard.cpp
 )
+
+# TinyUSB configuration for USB Host HID
+target_include_directories(pico_6502 PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
 target_link_libraries(
     pico_6502
@@ -48,6 +52,8 @@ target_link_libraries(
     hardware_clocks
     hardware_vreg
     hagl
+    tinyusb_host
+    tinyusb_board
 )
 
 # create map/bin/hex/uf2 files
