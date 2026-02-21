@@ -1,0 +1,5 @@
+[submodule "sd_card_cli/pico-fatfs-sd"]
+	path = sd_card_cli/pico-fatfs-sd
+	url = https://github.com/inindev/pico-fatfs-sd.git
+	shallow = true
+	branch = main

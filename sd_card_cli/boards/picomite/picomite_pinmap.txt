@@ -1,0 +1,36 @@
+picomite pinmap:
+
+| GPIO | Function | Notes |
+|---|---|---|
+| GP0 | External I/O | U23 header |
+| GP1 | External I/O | U23 header |
+| GP2 | External I/O | U23 header + H1 header |
+| GP3 | External I/O | U23 header + H1 header |
+| GP4 | External I/O | U23 header + H1 header |
+| GP5 | External I/O | U23 header |
+| GP6 | External I/O | U23 header |
+| GP7 | External I/O | U23 header + H1 header |
+| GP8 | CONSOLE-TX | UART1 TX → CH340C |
+| GP9 | CONSOLE-RX | UART1 RX → CH340C |
+| GP10 | AUDIO_L | PWM audio left (LC filter → 3.5mm jack) |
+| GP11 | AUDIO_R | PWM audio right (LC filter → 3.5mm jack) |
+| GP12 | DVI D0+ | HSTX Data 0+ → HDMI |
+| GP13 | DVI D0- | HSTX Data 0- → HDMI |
+| GP14 | DVI CK+ | HSTX Clock+ → HDMI |
+| GP15 | DVI CK- | HSTX Clock- → HDMI |
+| GP16 | DVI D2+ | HSTX Data 2+ → HDMI |
+| GP17 | DVI D2- | HSTX Data 2- → HDMI |
+| GP18 | DVI D1+ | HSTX Data 1+ → HDMI |
+| GP19 | DVI D1- | HSTX Data 1- → HDMI |
+| GP20 | I2C0 SDA | DS3231 RTC + U23 header |
+| GP21 | I2C0 SCL | DS3231 RTC + U23 header |
+| GP22 | SD Card CS | SD DAT3/CS |
+| GP23 | External I/O | U23 header pin 18 |
+| GP24 | — | Not exposed (internal to Pico 2) |
+| GP25 | — | Pico 2 on-board LED (TP5) |
+| GP26 | SD Card SCK | SPI1 SCK (via jumper) |
+| GP27 | SD Card MOSI | SPI1 TX (via jumper) |
+| GP28 | SD Card MISO | SPI1 RX (via jumper) |
+| GP29 | — | Internal (VSYS/3 ADC sense) |
+
+
