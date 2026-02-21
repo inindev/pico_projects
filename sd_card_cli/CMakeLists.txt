@@ -1,11 +1,12 @@
 # sd_card_cli - SD card CLI for RP2350-based boards
 #
 # Uses pico-fatfs-sd (fork of carlk3's library) for SD card access.
-# Supports both SDIO (Fruit Jam) and SPI (PicoMite) interfaces.
+# Supports both SDIO (Fruit Jam) and SPI (PicoMite, Waveshare PiZero) interfaces.
 #
 # Board selection: cmake -DTARGET_BOARD=<board> ..
-#   fruit_jam  - Adafruit Fruit Jam (RP2350B, SDIO) [default]
-#   picomite   - PicoMite (RP2350A, SPI)
+#   fruit_jam        - Adafruit Fruit Jam (RP2350B, SDIO) [default]
+#   picomite         - PicoMite (RP2350A, SPI)
+#   waveshare_pizero - Waveshare RP2350-PiZero (RP2350B, SPI)
 
 cmake_minimum_required(VERSION 3.13)
 set(CMAKE_C_STANDARD 11)
@@ -23,8 +24,12 @@ elseif(TARGET_BOARD STREQUAL "picomite")
     set(PICO_BOARD picomite)
     set(PICO_BOARD_HEADER_DIRS ${CMAKE_CURRENT_LIST_DIR}/boards/picomite)
     set(HW_CONFIG boards/picomite/hw_config.c)
+elseif(TARGET_BOARD STREQUAL "waveshare_pizero")
+    set(PICO_BOARD waveshare_rp2350_pizero)
+    set(PICO_BOARD_HEADER_DIRS ${CMAKE_CURRENT_LIST_DIR}/boards/waveshare_rp2350_pizero)
+    set(HW_CONFIG boards/waveshare_rp2350_pizero/hw_config.c)
 else()
-    message(FATAL_ERROR "Unknown TARGET_BOARD: ${TARGET_BOARD}. Use 'fruit_jam' or 'picomite'.")
+    message(FATAL_ERROR "Unknown TARGET_BOARD: ${TARGET_BOARD}. Use 'fruit_jam', 'picomite', or 'waveshare_pizero'.")
 endif()
 
 set(PICO_PLATFORM rp2350)

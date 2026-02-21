@@ -11,6 +11,7 @@ upgraded to FatFs R0.16, and supports multiple boards via SDIO or SPI.
 |-------|------|-------------|
 | Adafruit Fruit Jam | RP2350B | SDIO (4-bit) |
 | PicoMite | RP2350A | SPI |
+| Waveshare RP2350-PiZero | RP2350B | SPI |
 
 ## Table of Contents
 
@@ -36,8 +37,8 @@ This is a trimmed fork of carlk3's library. Changes from upstream:
   ZuluSCSI/mbed-os/SdFat stubs, all examples
 - **Patched:** 5 fixes for RP2350B extended GPIO support (GPIOs 32-47)
 - **Upgraded:** FatFs R0.15 → R0.16, relocated to `lib/fatfs/`
-- **Multi-board:** Supports SDIO (Fruit Jam) and SPI (PicoMite) via
-  board-specific `hw_config.c` files under `boards/`
+- **Multi-board:** Supports SDIO (Fruit Jam) and SPI (PicoMite, Waveshare PiZero)
+  via board-specific `hw_config.c` files under `boards/`
 
 All patches are backward-compatible with RP2040.
 
@@ -335,8 +336,9 @@ set(CMAKE_C_STANDARD 11)
 set(CMAKE_CXX_STANDARD 17)
 
 # Board selection: cmake -DTARGET_BOARD=<board> ..
-#   fruit_jam  - Adafruit Fruit Jam (RP2350B, SDIO) [default]
-#   picomite   - PicoMite (RP2350A, SPI)
+#   fruit_jam        - Adafruit Fruit Jam (RP2350B, SDIO) [default]
+#   picomite         - PicoMite (RP2350A, SPI)
+#   waveshare_pizero - Waveshare RP2350-PiZero (RP2350B, SPI)
 if(NOT DEFINED TARGET_BOARD)
     set(TARGET_BOARD "fruit_jam")
 endif()
@@ -348,6 +350,10 @@ elseif(TARGET_BOARD STREQUAL "picomite")
     set(PICO_BOARD picomite)
     set(PICO_BOARD_HEADER_DIRS ${CMAKE_CURRENT_LIST_DIR}/boards/picomite)
     set(HW_CONFIG boards/picomite/hw_config.c)
+elseif(TARGET_BOARD STREQUAL "waveshare_pizero")
+    set(PICO_BOARD waveshare_rp2350_pizero)
+    set(PICO_BOARD_HEADER_DIRS ${CMAKE_CURRENT_LIST_DIR}/boards/waveshare_rp2350_pizero)
+    set(HW_CONFIG boards/waveshare_rp2350_pizero/hw_config.c)
 endif()
 
 set(PICO_PLATFORM rp2350)
@@ -377,8 +383,9 @@ pico_add_extra_outputs(sd_card_cli)
 
 ### Key CMake points
 
-- **Board selection:** Pass `-DTARGET_BOARD=fruit_jam` or
-  `-DTARGET_BOARD=picomite` at configure time. Defaults to `fruit_jam`.
+- **Board selection:** Pass `-DTARGET_BOARD=fruit_jam`,
+  `-DTARGET_BOARD=picomite`, or `-DTARGET_BOARD=waveshare_pizero` at configure
+  time. Defaults to `fruit_jam`.
 
 - **Per-board hw_config:** Each board has its own `hw_config.c` under
   `boards/<board>/`. The `HW_CONFIG` variable selects the correct one.
@@ -481,7 +488,9 @@ other PIO block (PIO0) for any additional PIO peripherals.
 
 5. **The `SDIO_CLK_PIN_D0_OFFSET` constant (30)** is defined in `rp2040_sdio.pio`
    and represents -2 in mod-32 arithmetic. This is a hardware constraint of the
-   PIO program: CLK must be 2 pins below D0 in the PIO pin space.
+   PIO program: CLK must be 2 pins below D0 in the PIO pin space. Boards where
+   CLK is not at D0-2 (e.g., Waveshare RP2350-PiZero: CLK=GPIO 30, D0=GPIO 40)
+   cannot use the SDIO driver and must use SPI instead.
 
 6. **RP2040 compatibility:** All patches use conditional checks
    (`D0_gpio >= 32 ? 16 : 0`), so patched code still works on RP2040 boards
@@ -515,6 +524,10 @@ make -C build-fruitjam -j$(sysctl -n hw.ncpu)
 cmake -B build-picomite -DTARGET_BOARD=picomite .
 make -C build-picomite -j$(sysctl -n hw.ncpu)
 
+# Waveshare RP2350-PiZero
+cmake -B build-pizero -DTARGET_BOARD=waveshare_pizero .
+make -C build-pizero -j$(sysctl -n hw.ncpu)
+
 # Outputs (per build directory):
 #   build-<board>/sd_card_cli.uf2      - Interactive CLI
 #   build-<board>/tests/sd_card_tests.uf2  - Automated test suite
@@ -522,6 +535,13 @@ make -C build-picomite -j$(sysctl -n hw.ncpu)
 
 **Flash:** Hold BOOTSEL, plug in USB, copy the `.uf2` file to the RPI-RP2 drive.
 
-**Serial console:** Connect to the Fruit Jam's UART0 (GPIO 44 TX, GPIO 45 RX) at
-115200 baud. The CLI presents a `> ` prompt with commands like `mount`, `umount`,
+**Serial console:** Connect at 115200 baud to the board's UART:
+
+| Board | UART | TX | RX |
+|-------|------|----|----|
+| Fruit Jam | UART0 | GPIO 44 | GPIO 45 |
+| PicoMite | UART0 | GPIO 0 | GPIO 1 |
+| Waveshare PiZero | UART1 | GPIO 4 | GPIO 5 |
+
+The CLI presents a `pico> ` prompt with commands like `mount`, `umount`,
 `ls`, `cat`, `write`, `cp`, `rm`, `mkdir`, `info`, `csd`, and `format`.
